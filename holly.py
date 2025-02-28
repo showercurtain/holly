@@ -4,7 +4,7 @@ Authored by Jackson Coxson
 """
 
 import json
-import jsonstream
+import json_stream
 import socket
 import re
 from typing import Union
@@ -278,7 +278,7 @@ class HollyClient:
             return HollyMessage(json_data=msg)
         try:
             data = self.socket.recv(2048)
-            it = jsonstream.loads(data.decode("utf-8"))
+            it = json_stream.loads(data.decode("utf-8"))
             msg = next(it)
             if msg:
                 self.cache.extend(list(it))

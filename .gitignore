@@ -4,3 +4,5 @@ config.toml
 cookies.json
 log.png
 /logs
+Cargo.lock
+geckodriver.exe
