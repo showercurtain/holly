@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use chat::ChatMessage;
 use log::{debug, error, info, warn};
-use thirtyfour::error::WebDriverResult;
+use thirtyfour::{error::WebDriverResult, By};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::Mutex,
@@ -17,32 +17,24 @@ mod cache;
 mod chat;
 mod config;
 
-async fn entry(clear_cookies: bool) -> WebDriverResult<()> {
+async fn entry() -> WebDriverResult<()> {
     let config = config::Config::load();
     let client = browser::Browser::new(&config).await.unwrap();
 
-    if !clear_cookies {
-        client.load_cookies().await.unwrap();
-    }
-
     if !client.is_logged_in().await
         && client
-            .login(&config.fb_username, &config.fb_password)
+            .login()
             .await
             .is_err()
     {
         warn!("Cookies are invalid, logging in again");
-        client.delete_cookies().await.unwrap();
         client
-            .login(&config.fb_username, &config.fb_password)
+            .login()
             .await
             .unwrap();
-        client.dump_cookies().await.unwrap();
     }
-    client.dump_cookies().await.unwrap();
-    if let Some(pin) = config.e2ee_pin {
-        client.enter_e2ee_pin(pin).await;
-    }
+
+    client.wrap_up().await?;
 
     let listener =
         tokio::net::TcpListener::bind(format!("{}:{}", config.tcp.host, config.tcp.port))
@@ -121,10 +113,10 @@ async fn entry(clear_cookies: bool) -> WebDriverResult<()> {
     });
 
     let mut cache = Cache::new();
-    let current_chat = client.get_current_chat().await.unwrap();
-    cache
-        .check(&current_chat, &client.get_messages(false).await.unwrap())
-        .await;
+    // let current_chat = client.get_current_chat().await.unwrap();
+    // cache
+    //     .check(&current_chat, &client.get_messages(false).await.unwrap())
+    //     .await;
 
     let mut error_count: u8 = 0;
 
@@ -132,16 +124,41 @@ async fn entry(clear_cookies: bool) -> WebDriverResult<()> {
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(
             config.refresh_rate as u64 / 2,
-        ))
-        .await;
+            ))
+            .await;
+        loop {
+        // Check for unread messages
+        // We can't get messages without selecting a chat first!
+        let mut chats = match client.get_chats().await {
+            Ok(chats) => chats,
+            Err(e) => {
+                error!("Unable to get chats: {:?}", e);
+                error_count += 1;
+                if error_count > 10 {
+                    return Err(e);
+                }
+                break;
+            }
+        };
+        debug!("Unread chats: {chats:?}");
+        chats.retain(|chat| chat.unread || (!cache.check_key(&chat.id) && cache.size() < 20));
+        if !chats.is_empty() {
+            if chats[0].click(config.latency).await.is_err() {
+                if let Err(e) = client.refresh().await {
+                    error!("Unable to refresh, aborting Holly!");
+                    return Err(e);
+                }
+            }
+        } else {
+            break
+        }
 
-        // Decline calls
-        if let Err(e) = client.decline_call().await {
-            error!("Unable to decline call: {:?}", e);
+        if let Ok(b) = chats[0].element.find(By::XPath(".//button[@aria-label=\"Mark as read\"]")).await {
+            b.click().await?;
         }
 
         // See if the current chat has different messages than before
-        let current_message = match client.get_messages(false).await {
+        let current_message = match client.get_messages(false, chats[0].id.clone()).await {
             Ok(c) => c,
             Err(e) => {
                 error!("Unable to get messages: {:?}", e);
@@ -149,49 +166,37 @@ async fn entry(clear_cookies: bool) -> WebDriverResult<()> {
                 if error_count > 10 {
                     return Err(e);
                 }
-                continue;
+                break;
             }
         };
 
-        tokio::time::sleep(std::time::Duration::from_millis(
-            config.refresh_rate as u64 / 2,
-        ))
-        .await;
+        // tokio::time::sleep(std::time::Duration::from_millis(
+        //     config.refresh_rate as u64 / 2,
+        // ))
+        // .await;
 
-        let second_sample = match client.get_messages(false).await {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Unable to get messages: {:?}", e);
-                error_count += 1;
-                if error_count > 10 {
-                    return Err(e);
-                }
-                continue;
-            }
-        };
+        // let second_sample = match client.get_messages(false, chats[0].id.clone()).await {
+        //     Ok(c) => c,
+        //     Err(e) => {
+        //         error!("Unable to get messages: {:?}", e);
+        //         error_count += 1;
+        //         if error_count > 10 {
+        //             return Err(e);
+        //         }
+        //         break;
+        //     }
+        // };
 
-        if current_message != second_sample {
-            warn!("Message samples don't match!");
-            continue;
-        }
+        // if current_message != second_sample {
+        //     warn!("Message samples don't match!");
+        //     break;
+        // }
 
-        let current_chat = match client.get_current_chat().await {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Unable to get current chat: {:?}", e);
-                error_count += 1;
-                if error_count > 10 {
-                    return Err(e);
-                }
-                continue;
-            }
-        };
-
-        if let Some(unread_messages) = cache.check(&current_chat, &current_message).await {
+        if let Some(unread_messages) = cache.check(&chats[0].id, &current_message).await {
             for message in unread_messages {
                 info!(
-                    "{} in {}: {}",
-                    message.sender, current_chat, message.content
+                    "in {}: {}",
+                    chats[0].id, message.content
                 );
                 let blocking_senders = senders.clone();
                 tokio::task::spawn_blocking(move || {
@@ -200,6 +205,8 @@ async fn entry(clear_cookies: bool) -> WebDriverResult<()> {
                         .retain(|sender| sender.blocking_send(message.clone()).is_ok());
                 });
             }
+        }
+        break;
         }
 
         // Possibly send a message
@@ -231,6 +238,8 @@ async fn entry(clear_cookies: bool) -> WebDriverResult<()> {
                     continue;
                 }
                 "<file>" => {
+                    error!("File sending is not yet implemented");
+                    continue;
                     info!("Sending file!");
                     if let Err(e) = client.go_to_chat(&msg.chat_id).await {
                         error!("Unable to go to chat for file send: {:?}", e);
@@ -275,38 +284,8 @@ async fn entry(clear_cookies: bool) -> WebDriverResult<()> {
             }
         }
 
-        // Check for unread messages
-        let mut chats = match client.get_chats().await {
-            Ok(chats) => chats,
-            Err(e) => {
-                error!("Unable to get chats: {:?}", e);
-                error_count += 1;
-                if error_count > 10 {
-                    return Err(e);
-                }
-                continue;
-            }
-        };
-        debug!("Unread chats: {chats:?}");
-        chats.retain(|chat| chat.unread || (!cache.check_key(&chat.id) && cache.size() < 20));
-        if !chats.is_empty() {
-            if chats[0].click(config.latency).await.is_err() {
-                if let Err(e) = client.refresh().await {
-                    error!("Unable to refresh, aborting Holly!");
-                    error_count += 1;
-                    if error_count > 10 {
-                        return Err(e);
-                    }
-                    return Err(e);
-                }
-                continue;
-            }
-
-            continue;
-        }
-
         // Until next time *rides motorcycle away*
-        tokio::time::sleep(std::time::Duration::from_millis(config.refresh_rate as u64)).await;
+        
     }
 }
 
@@ -322,23 +301,23 @@ async fn main() {
     info!("Logger initialized");
 
     let mut last_error = std::time::Instant::now();
-    let mut clear_cookies = false;
+    let mut errored = false;
 
     loop {
-        if let Err(e) = entry(clear_cookies).await {
+        if let Err(e) = entry().await {
             error!("Holly crashed with {:?}", e);
             if last_error.elapsed().as_secs() > 60 {
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 info!("Restarting Holly...");
                 last_error = std::time::Instant::now();
-                clear_cookies = false;
-            } else if clear_cookies {
+                errored = false;
+            } else if errored {
                 panic!("Holly has run into an unrecoverable state!")
             } else {
-                clear_cookies = true;
+                errored = true;
             }
         } else {
-            clear_cookies = false;
+            errored = false;
             info!("Holly is restarting...");
         }
     }

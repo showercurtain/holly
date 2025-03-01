@@ -2,14 +2,14 @@
 # https://www.asciiart.eu/animals/dogs
 # These look bad in vscode's font, but look normal on Messenger
 
-LAYING = """
+LAYING = """```
 .   __           _
 o ' ' ) }____/ /
    `_ /            )
    (_( _ / - (_ /
-"""
+```"""
 
-SITTING = """
+SITTING = """```
 .        ,
          | ` - .__
         /    '   _/
@@ -19,12 +19,12 @@ SITTING = """
  \\ / `    \\ \\ \\
   ` \\   / _ \\  \\
    `~~~~``~`
-"""
+```"""
 
-RUNNING = """
+RUNNING = """```
 .                           . - -~~ ,__
 : - . . . . , - - - - - - - ` ~ ~ '._. '
  ` - , , ,      ,_                ; '~U'
    _ , - '   , ' ` - _ _ ;   ' - - .
   (_ /'~~              ' ' ' ' ( ;
-"""
+```"""

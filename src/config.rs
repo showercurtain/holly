@@ -1,11 +1,12 @@
 // Jackson Coxson
 
-use dialoguer::{theme::ColorfulTheme, Input, Password, Select};
+// I'm not messing with this rn
+// - Sean
+
+use dialoguer::{theme::ColorfulTheme, Input, Select};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_CONFIG: &str = r#"# Holly Config
-fb_username = "asdfasdf@urmom.com"
-fb_password = "monkey123"
 refresh_rate = 3000
 
 [gecko]
@@ -21,9 +22,6 @@ host = "127.0.0.1"
 /// Holly configuration file
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
-    pub fb_username: String,
-    pub fb_password: String,
-    pub e2ee_pin: Option<String>,
     pub refresh_rate: usize,
     pub latency: usize,
     pub gecko: Gecko,
@@ -57,29 +55,6 @@ impl Config {
                 if atty::is(atty::Stream::Stdout) {
                     println!("Looks like you don't have a Holly config, let's set one up!");
                     let new_config = Config {
-                        fb_username: Input::with_theme(&ColorfulTheme::default())
-                            .with_prompt("Enter your Facebook bot username")
-                            .interact()
-                            .unwrap(),
-                        fb_password: Password::with_theme(&ColorfulTheme::default())
-                            .with_prompt("Enter your Facebook bot password")
-                            .interact()
-                            .unwrap(),
-                        e2ee_pin: loop {
-                            let pin: String = Input::with_theme(&ColorfulTheme::default())
-                                .with_prompt(
-                                    "Enter your Facebook bot e2ee pin (leave empty for none)",
-                                )
-                                .allow_empty(true)
-                                .interact()
-                                .unwrap();
-                            if pin.is_empty() {
-                                break None;
-                            } else if pin.parse::<u32>().is_ok() {
-                                break Some(pin);
-                            }
-                            println!("Enter a number...");
-                        },
                         refresh_rate: loop {
                             let rate: String = Input::with_theme(&ColorfulTheme::default())
                                 .with_prompt(

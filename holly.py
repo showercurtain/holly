@@ -4,7 +4,7 @@ Authored by Jackson Coxson
 """
 
 import json
-import jsonstream
+import json_stream
 import socket
 import re
 from typing import Union
@@ -12,7 +12,18 @@ import itertools
 
 DEFAULT_JUNK = ["a", "an", "are", "as", "is", "the"]
 
-
+def jsonsplit(s):
+    d = 0
+    t = ""
+    for i in s:
+        t += i
+        if i == "{":d+=1
+        if i == "}":
+            d -= 1
+            if d < 0: raise Exception("Invalid JSON")
+            if d == 0 and t != "":
+                yield json.loads(t)
+                t = ""
 class HollyError(Exception):
     """Exception raised for errors in the Holly module.
 
@@ -155,9 +166,15 @@ class HollyParser:
         if content.lower().startswith(self.name.lower()):
             targeted = True
             content = content[len(self.name) :].strip()
-        if "@" + self.mention_name in content:
+        if content.startswith(self.mention_name):
             targeted = True
-            content = content.replace("@" + self.mention_name, "").strip()
+            content = content[len(self.mention_name)+2:]
+        if content.endswith(self.mention_name):
+            targeted = True
+            content = content[:-len(self.mention_name)-2]
+        if self.mention_name in content:
+            targeted = True
+            content = content.replace(" \n" + self.mention_name + "\n ", " ").strip()
 
         try:
             if self.remove_punctuation:
@@ -278,7 +295,7 @@ class HollyClient:
             return HollyMessage(json_data=msg)
         try:
             data = self.socket.recv(2048)
-            it = jsonstream.loads(data.decode("utf-8"))
+            it = jsonsplit(data.decode("utf-8"))
             msg = next(it)
             if msg:
                 self.cache.extend(list(it))

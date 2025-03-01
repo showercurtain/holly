@@ -1,8 +1,9 @@
 // Jackson Coxson
+// But also Sean Cowley
 
-use std::process::Stdio;
+use std::{io::Write, process::Stdio, time::Duration};
 
-use log::{error, info, warn};
+use log::{error, warn, trace};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
@@ -10,8 +11,6 @@ use thirtyfour::prelude::*;
 use tokio::process::{Child, Command};
 
 use crate::config::Config;
-
-const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36";
 
 pub struct Browser {
     driver: WebDriver,
@@ -23,33 +22,34 @@ pub struct Browser {
 struct JsonCookie {
     name: String,
     value: String,
+    domain: String,
+    path: String,
 }
 
 impl Browser {
     pub async fn new(config: &Config) -> Result<Self, WebDriverResult<()>> {
+        trace!("Browser::new");
         let _gecko = launch_driver(&config.gecko.path, config.gecko.port);
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-        let mut caps = DesiredCapabilities::firefox();
-        caps.add_firefox_arg("--disable-infobars").unwrap();
-        caps.add_firefox_arg("--no-sandbox").unwrap();
-        caps.add_firefox_arg("--disable-application-cache").unwrap();
-        caps.add_firefox_arg("--disable-gpu").unwrap();
-        caps.add_firefox_arg("--disable-dev-shm-usage").unwrap();
-        caps.add_firefox_arg("--start-maximized").unwrap();
-        caps.add_firefox_arg("--disable-extensions").unwrap();
-        caps.add_firefox_arg("--window-size=1920,1080").unwrap();
-        caps.add_firefox_arg(&format!("user-agent={USER_AGENT}"))
-            .unwrap();
+        let mut caps = DesiredCapabilities::chrome();
+        caps.add_chrome_arg("start-maximized").unwrap();
+        caps.add_chrome_arg("disable-infobars").unwrap();
+        //caps.add_chrome_arg("--disable-dev-shm-usage").unwrap();
+        caps.add_chrome_arg("--disable-extensions").unwrap();
+        //caps.add_chrome_arg("--no-sandbox").unwrap();
+        caps.add_chrome_arg("--remote-debugging-pipe").unwrap();
+        
+        caps.add_chrome_arg("--user-data-dir=./data").unwrap();
 
         if config.gecko.headless {
-            caps.add_firefox_arg("--headless").unwrap();
-            caps.add_firefox_arg("--disable-gpu").unwrap();
+            caps.add_chrome_arg("--headless").unwrap();
+            caps.add_chrome_arg("--disable-gpu").unwrap();
         }
 
         let driver = WebDriver::new("http://localhost:4444", caps).await.unwrap();
 
-        driver.goto("https://messenger.com").await.unwrap();
+        driver.goto("https://mail.google.com/chat").await.unwrap();
 
         Ok(Self {
             driver,
@@ -58,86 +58,39 @@ impl Browser {
         })
     }
 
-    /// Logs into Messenger. This will only work if we're not already logged in
-    pub async fn login(&self, username: &str, password: &str) -> WebDriverResult<()> {
-        self.driver.goto("https://messenger.com").await?;
-        let email_input = self
-            .driver
-            .query(By::Id("email"))
-            .wait(
-                std::time::Duration::from_secs(10),
-                std::time::Duration::from_millis(100),
-            )
-            .and_clickable()
-            .first()
-            .await?;
+    // Log into Google Chat manually
+    // Only works if we're not on headless mode
+    pub async fn login(&self) -> WebDriverResult<()> {
+        trace!("Browser::login");
+        self.driver.goto("https://mail.google.com/chat").await?;
 
-        let password_input = self
-            .driver
-            .query(By::Id("pass"))
-            .wait(
-                std::time::Duration::from_secs(10),
-                std::time::Duration::from_millis(100),
-            )
-            .and_clickable()
-            .first()
-            .await?;
-
-        let login_button = self
-            .driver
-            .query(By::Id("loginbutton"))
-            .wait(
-                std::time::Duration::from_secs(10),
-                std::time::Duration::from_millis(100),
-            )
-            .first()
-            .await?;
-
-        email_input.send_keys(username).await?;
-        password_input.send_keys(password).await?;
-        login_button.click().await?;
+        print!("Waiting for login... Press enter when finished");
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stdin().read_line(&mut String::new());
 
         Ok(())
     }
 
-    /// Checks for the xs cookie (token) and the presence of the 'Chats' h1 element. It loads before XHR requests are made
+    /// If we're not logged in, mail.google.com will always redirect somewhere
     pub async fn is_logged_in(&self) -> bool {
-        // Does the xs cookie exist?
-        self.driver.get_named_cookie("xs").await.is_ok()
-            && self
-                .driver
-                .find(By::XPath("//a[@aria-label=\"New message\"]"))
-                .await
-                .is_ok()
+        trace!("is_logged_in");
+        if let Some(domain) = self.driver.current_url().await.unwrap().domain() {
+            domain.contains("mail.google.com")
+        } else {
+            false
+        }
     }
 
-    /// Enters the dumb e2ee pin Facebook is shoving down everyones' throats
-    pub async fn enter_e2ee_pin(&self, pin: String) {
-        if let Ok(pin_input) = self
-            .driver
-            .query(By::XPath(
-                "//input[@id='mw-numeric-code-input-prevent-composer-focus-steal']",
-            ))
-            .wait(
-                std::time::Duration::from_secs(20),
-                std::time::Duration::from_millis(500),
-            )
-            .first()
-            .await
-        {
-            // enter that pin
-            info!("Entering e2ee pin");
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            if let Err(e) = pin_input.send_keys(pin).await {
-                warn!("Failed to send keys to pin input: {e:?}");
-            }
-        } else {
-            warn!("Failed to get the pin box, but a e2ee pin was supplied via config!");
-        }
+    pub async fn wrap_up(&self) -> WebDriverResult<()> {
+        trace!("Browser::wrap_up");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        self.driver.switch_to().frame_element(&self.driver.find(By::XPath("//iframe[@class=\"bGz\"]")).await?).await
+        // If anyone knows the not-deprecated way to do this, I'm all ears
     }
 
     /// Gets all the chats on the side bar. Includes whether or not they are unread.
     pub async fn get_chats(&self) -> WebDriverResult<Vec<crate::chat::ChatOption>> {
+        trace!("Browser::get_chats");
         crate::chat::ChatOption::get_all(&self.driver).await
     }
 
@@ -145,7 +98,8 @@ impl Browser {
     /// Attempts to find it on the side bar to click that object.
     /// If it's not found, it will just navigate via URL.
     pub async fn go_to_chat(&self, id: &str) -> WebDriverResult<()> {
-        self.decline_call().await.unwrap();
+        trace!("Browser::go_to_chat");
+        //self.decline_call().await.unwrap();
         let chats = self.get_chats().await?;
         match chats.iter().find(|c| c.id == id) {
             Some(chat) => {
@@ -154,33 +108,18 @@ impl Browser {
             None => {
                 // Manually go
                 self.driver
-                    .goto(format!("https://www.messenger.com/t/{}", id))
+                    .goto(format!("https://mail.google.com/chat/u/0/#chat/{}", id))
                     .await?;
             }
         }
         Ok(())
     }
 
-    /// Declines a Messenger call on the browser
-    pub async fn decline_call(&self) -> WebDriverResult<()> {
-        // Get the decline object if it exists
-        // aria-lable = "Decline"
-        let decline = self
-            .driver
-            .find(By::XPath("//div[@aria-label=\"Decline\"]"))
-            .await;
-
-        if let Ok(d) = decline {
-            info!("Declining call");
-            d.click().await?;
-        }
-        Ok(())
-    }
-
     /// Refreshes the tab
     pub async fn refresh(&self) -> WebDriverResult<()> {
+        trace!("Browser::refresh");
         self.driver.refresh().await?;
-        Ok(())
+        self.wrap_up().await
     }
 
     /// Takes a screenshot and saves it to logs/timestamp.png
@@ -250,26 +189,16 @@ impl Browser {
         }
     }
 
-    /// Gets the ID of the current chat
-    pub async fn get_current_chat(&self) -> WebDriverResult<String> {
-        let current_url = self.driver.current_url().await?;
-        let id = current_url
-            .path()
-            .split('/')
-            .filter(|x| !x.is_empty())
-            .last()
-            .unwrap();
-        Ok(id.to_string())
-    }
-
     /// Gets the list of all the messages in the current chat
-    pub async fn get_messages(&self, last: bool) -> WebDriverResult<Vec<crate::chat::ChatMessage>> {
-        crate::chat::ChatMessage::get(&self.driver, self.get_current_chat().await?, last).await
+    pub async fn get_messages(&self, last: bool, chat_id: String) -> WebDriverResult<Vec<crate::chat::ChatMessage>> {
+        trace!("Browser::get_messages");
+        crate::chat::ChatMessage::get(&self.driver, chat_id, last).await
     }
 
     /// Sends a message to the current chat
     pub async fn send_message(&self, message: &str) -> WebDriverResult<()> {
-        self.decline_call().await.unwrap();
+        trace!("Browser::send_message");
+        //self.decline_call().await.unwrap();
 
         let chat_bar = match self
             .driver
@@ -278,14 +207,18 @@ impl Browser {
                 std::time::Duration::from_secs(5),
                 std::time::Duration::from_millis(100),
             )
-            .first()
+            .all()
             .await
         {
-            Ok(c) => c,
+            Ok(mut c) => c.pop().unwrap_or(
+                self.driver
+                    .find(By::XPath("//div[contains(@aria-label,'Message ')]"))
+                    .await?
+            ),
             Err(_) => {
                 warn!("Unable to get sender box by textbox role");
                 self.driver
-                    .find(By::XPath("//div[@aria-label='Message']"))
+                    .find(By::XPath("//div[contains(@aria-label,'Message ')]"))
                     .await?
             }
         };
@@ -293,7 +226,7 @@ impl Browser {
 
         let mut rand_gen = rand::thread_rng();
         for c in message.chars() {
-            self.decline_call().await.unwrap();
+            //self.decline_call().await.unwrap();
             let x = rand_gen.gen_range(1..=30);
             if x == 7 {
                 for asdf in "asdf".chars() {
@@ -311,7 +244,11 @@ impl Browser {
                     .await;
                 }
             }
-            chat_bar.send_keys(String::from(c)).await?;
+            if c == '\n' {
+                chat_bar.send_keys(Key::Shift+Key::Enter).await?;
+            } else {
+                chat_bar.send_keys(String::from(c)).await?;
+            }
             tokio::time::sleep(std::time::Duration::from_millis(
                 rand_gen.gen_range(10..=20),
             ))
@@ -321,7 +258,7 @@ impl Browser {
 
         if let Ok(send_button) = self
             .driver
-            .find(By::XPath("//div[@aria-label='Press enter to send']"))
+            .find(By::XPath("//div[@aria-label='Send message']"))
             .await
         {
             let _ = send_button.click().await;
@@ -331,8 +268,7 @@ impl Browser {
     }
 
     pub async fn send_file(&self, path: &str) -> WebDriverResult<()> {
-        self.decline_call().await.unwrap();
-
+        todo!("Correct for Google Chats");
         let chat_bar = match self
             .driver
             .query(By::XPath("//div[@role='textbox']"))
@@ -411,72 +347,16 @@ impl Browser {
 
         Ok(())
     }
-
-    /// Dumps the cookies to cookies.json so we don't have to login every time
-    pub async fn dump_cookies(&self) -> WebDriverResult<()> {
-        let cookies = self.driver.get_all_cookies().await?;
-        let mut file = match std::fs::File::create("cookies.json") {
-            Ok(file) => file,
-            Err(e) => {
-                error!("Failed to create cookies.json: {}", e);
-                return Err(WebDriverError::CustomError(format!(
-                    "Failed to create cookies.json: {}",
-                    e
-                )));
-            }
-        };
-        let json_cookies: Vec<JsonCookie> = cookies
-            .iter()
-            .map(|c| JsonCookie {
-                name: c.name().to_owned(),
-                value: c.value().to_owned(),
-            })
-            .collect();
-        serde_json::to_writer_pretty(&mut file, &json_cookies).unwrap();
-        Ok(())
-    }
-
-    /// Loads the cookies from cookies.json so we don't have to login every time
-    pub async fn load_cookies(&self) -> WebDriverResult<()> {
-        let mut file = match std::fs::File::open("cookies.json") {
-            Ok(file) => file,
-            Err(_) => {
-                warn!("No cookies.json file found");
-                return Ok(());
-            }
-        };
-        let mut json_cookies: Vec<JsonCookie> = serde_json::from_reader(&mut file).unwrap();
-        for cookie in json_cookies.drain(..) {
-            self.driver
-                .add_cookie(
-                    Cookie::build(cookie.name, cookie.value)
-                        .path("/")
-                        .domain("messenger.com")
-                        .finish(),
-                )
-                .await?;
-        }
-        self.driver.refresh().await?;
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-        Ok(())
-    }
-
-    /// Wipes the cookies
-    pub async fn delete_cookies(&self) -> WebDriverResult<()> {
-        self.driver.delete_all_cookies().await?;
-        Ok(())
-    }
 }
 
 fn launch_driver(path: &str, port: u16) -> Child {
+    trace!("launch_driver");
     Command::new(path)
-        .arg("-p")
-        .arg(port.to_string())
+        .arg(format!("--port={port}"))
         .kill_on_drop(true)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .stdin(Stdio::null())
         .spawn()
-        .expect("Unable to spawn geckodriver! Check that the path is correct!")
+        .expect("Unable to spawn chromedriver! Check that the path is correct!")
 }

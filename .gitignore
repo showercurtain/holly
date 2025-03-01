@@ -1,6 +1,10 @@
 /target
+/logs
+/data
 __pycache__
 config.toml
 cookies.json
 log.png
-/logs
+Cargo.lock
+geckodriver.exe
+chromedriver.exe

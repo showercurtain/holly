@@ -88,7 +88,7 @@ def process_message(msg: holly.ParsedHollyMessage):
 def main():
     """Main function"""
 
-    parser = holly.HollyParser()
+    parser = holly.HollyParser(remove_punctuation=False, mention_name="E-Orch Park California Modesto Mission")
 
     while True:
         try:
@@ -100,7 +100,7 @@ def main():
                 ret = process_message(raw_msg.parse(parser))
                 if ret:
                     client.send(holly.HollyMessage(
-                        content=ret, chat_id=raw_msg.chat_id, sender=''))
+                        content=ret, chat_id=raw_msg.chat_id))
 
         except holly.HollyError as e:
             print(f"Error: {e}")

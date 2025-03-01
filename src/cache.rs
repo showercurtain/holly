@@ -46,14 +46,14 @@ impl Cache {
             return None;
         }
 
+        if new_messages == old_messages {
+            return None;
+        }
+
         let debug_lines = new_messages.iter().zip(old_messages.iter());
         debug!("New Messages | Old Messages");
         for (n, o) in debug_lines {
             debug!("{:?} | {:?}", n.content, o.content);
-        }
-
-        if new_messages == old_messages {
-            return None;
         }
 
         let mut new_count = 0;
