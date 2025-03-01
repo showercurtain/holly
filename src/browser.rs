@@ -3,7 +3,7 @@
 
 use std::{io::Write, process::Stdio, time::Duration};
 
-use log::{error, warn, trace};
+use log::{error, info, trace, warn};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
@@ -42,7 +42,9 @@ impl Browser {
         
         caps.add_chrome_arg("--user-data-dir=./data").unwrap();
 
-        if config.gecko.headless {
+        if !std::fs::exists("./data").unwrap_or(true) && config.gecko.headless {
+            info!("No chrome data found, running not headless for sign-in")
+        } else if config.gecko.headless {
             caps.add_chrome_arg("--headless").unwrap();
             caps.add_chrome_arg("--disable-gpu").unwrap();
         }
